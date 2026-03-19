@@ -2,7 +2,6 @@
 BirdID Backend — Flask server wrapping SpeciesNet
 """
 import argparse
-import io
 import logging
 import os
 import tempfile
@@ -18,13 +17,14 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# ── Load SpeciesNet ────────────────────────────────────────────────────────
 log.info("Loading SpeciesNet ensemble — this may take a moment…")
 try:
     from speciesnet import SpeciesNet
-    model = SpeciesNet()
+    model = SpeciesNet(model_name="kaggle:google/speciesnet/pyTorch/v4.0.2a/1")
     log.info("SpeciesNet ready.")
 except Exception as e:
-    log.warning(f"Could not load SpeciesNet: {e}. Running in demo mode.")
+    log.error(f"Could not load SpeciesNet: {e}")
     model = None
 
 UPLOAD_FOLDER = tempfile.gettempdir()
@@ -37,7 +37,11 @@ def allowed(filename):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model": "SpeciesNet", "model_loaded": model is not None})
+    return jsonify({
+        "status": "ok",
+        "model": "SpeciesNet v4.0.2a",
+        "model_loaded": model is not None
+    })
 
 
 @app.route("/predict", methods=["POST"])
@@ -62,10 +66,10 @@ def predict():
             img.verify()
 
         if model is None:
-            return jsonify({"error": "SpeciesNet model not loaded"}), 500
+            return jsonify({"error": "SpeciesNet model not loaded — check server logs"}), 500
 
         country = request.form.get("country", "").strip().upper()
-        state = request.form.get("state", "").strip().upper()
+        state   = request.form.get("state",   "").strip().upper()
 
         instance = {"filepath": tmp_path}
         if country:
@@ -86,10 +90,10 @@ def predict():
             if isinstance(p, dict):
                 label = p.get("label") or p.get("classification") or ""
                 entry = {
-                    "label": label,
-                    "scientific_name": p.get("scientific_name") or _extract_sci(label),
-                    "common_name": p.get("common_name") or label,
-                    "score": float(p.get("score") or p.get("confidence") or p.get("probability") or 0),
+                    "label":             label,
+                    "scientific_name":   p.get("scientific_name") or _extract_sci(label),
+                    "common_name":       p.get("common_name") or label,
+                    "score":             float(p.get("score") or p.get("confidence") or p.get("probability") or 0),
                     "prediction_source": p.get("prediction_source") or "",
                 }
                 predictions.append(entry)
@@ -97,9 +101,9 @@ def predict():
         predictions.sort(key=lambda x: x["score"], reverse=True)
 
         return jsonify({
-            "predictions": predictions,
+            "predictions":       predictions,
             "prediction_source": predictions[0].get("prediction_source", "") if predictions else "",
-            "filepath": file.filename,
+            "filepath":          file.filename,
         })
 
     except Exception as exc:
@@ -124,8 +128,8 @@ def _extract_sci(label):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--host",  default="0.0.0.0")
+    parser.add_argument("--port",  type=int, default=5000)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     log.info("Starting BirdID server on %s:%d", args.host, args.port)
