@@ -1,0 +1,87 @@
+# ============================================================
+# .github/workflows/deploy.yml
+# ============================================================
+# Auto-deploys to your Google Cloud VM on every push to main.
+#
+# SETUP (one-time):
+# 1. Generate a deploy SSH key pair (no passphrase):
+#       ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/birdid_deploy
+#
+# 2. Add the PUBLIC key to your VM:
+#       ssh-copy-id -i ~/.ssh/birdid_deploy.pub YOUR_USER@YOUR_VM_IP
+#    Or paste it into: ~/.ssh/authorized_keys on the VM
+#
+# 3. Add these GitHub repository SECRETS
+#    (Settings → Secrets and variables → Actions → New secret):
+#       VM_SSH_PRIVATE_KEY  → paste contents of ~/.ssh/birdid_deploy (the PRIVATE key)
+#       VM_IP               → your VM's external IP, e.g. 34.123.45.67
+#       VM_USER             → your VM username, e.g. johndoe
+#
+# After that, every git push to main triggers an automatic deploy.
+# ============================================================
+
+name: Deploy to GCP VM
+
+on:
+  push:
+    branches:
+      - main          # change to 'master' if that's your default branch
+  workflow_dispatch:  # allows manual trigger from GitHub Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout code (to verify build, not strictly needed for SSH deploy) ──
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up SSH agent ───────────────────────────────────────────────────
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+
+      # ── 3. Add VM to known hosts (avoids "authenticity" prompt) ──────────────
+      - name: Add VM to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.VM_IP }}" >> ~/.ssh/known_hosts
+
+      # ── 4. Deploy: pull latest + restart service ─────────────────────────────
+      - name: Deploy to VM
+        run: |
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} << 'ENDSSH'
+            set -e
+
+            echo "=== Pulling latest code ==="
+            cd ~/BirdID
+            git pull origin main
+
+            echo "=== Installing/updating Python dependencies ==="
+            source ~/birdid_venv/bin/activate
+            if [ -f backend/requirements.txt ]; then
+              pip install -r backend/requirements.txt -q
+            fi
+            pip install flask flask-cors pillow speciesnet gunicorn -q
+            deactivate
+
+            echo "=== Restarting birdid service ==="
+            sudo systemctl restart birdid
+
+            echo "=== Health check ==="
+            sleep 3
+            curl -sf http://localhost:5000/health && echo " ✓ API responding" || echo " ✗ API not responding — check logs"
+
+            echo "=== Deploy complete ==="
+          ENDSSH
+
+      # ── 5. Verify deployment ─────────────────────────────────────────────────
+      - name: Verify deployment
+        run: |
+          echo "Checking API health from GitHub Actions runner…"
+          curl -sf --max-time 10 http://${{ secrets.VM_IP }}:5000/health \
+            && echo "✅ API is live at http://${{ secrets.VM_IP }}:5000" \
+            || echo "⚠️  Could not reach API externally — check GCP firewall rules"

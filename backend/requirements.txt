@@ -1,5 +1,5 @@
-fastapi
-uvicorn
-python-multipart
+flask>=3.0
+flask-cors>=4.0
+pillow>=10.0
 speciesnet
-pandas
+gunicorn>=21.0
