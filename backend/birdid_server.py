@@ -1,24 +1,14 @@
-"""
-BirdID Backend — Flask server wrapping SpeciesNet
-"""
-import argparse
-import logging
-import os
-import tempfile
-import uuid
-
+import argparse, logging, os, tempfile, uuid
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from PIL import Image
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
-
 app = Flask(__name__)
 CORS(app)
 
-# ── Load SpeciesNet ────────────────────────────────────────────────────────
-log.info("Loading SpeciesNet ensemble — this may take a moment…")
+log.info("Loading SpeciesNet…")
 try:
     from speciesnet import SpeciesNet
     model = SpeciesNet(model_name="kaggle:google/speciesnet/pyTorch/v4.0.2a/1")
@@ -27,110 +17,64 @@ except Exception as e:
     log.error(f"Could not load SpeciesNet: {e}")
     model = None
 
-UPLOAD_FOLDER = tempfile.gettempdir()
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff"}
+ALLOWED = {"jpg","jpeg","png","webp","gif","bmp","tiff"}
 
-
-def allowed(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
+def allowed(fn):
+    return "." in fn and fn.rsplit(".",1)[1].lower() in ALLOWED
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "ok",
-        "model": "SpeciesNet v4.0.2a",
-        "model_loaded": model is not None
-    })
-
+    return jsonify({"status":"ok","model":"SpeciesNet v4.0.2a","model_loaded":model is not None})
 
 @app.route("/predict", methods=["POST"])
 def predict():
     if "image" not in request.files:
-        return jsonify({"error": "No image file in request (key must be 'image')"}), 400
-
-    file = request.files["image"]
-    if file.filename == "":
-        return jsonify({"error": "Empty filename"}), 400
-    if not allowed(file.filename):
-        return jsonify({"error": f"Unsupported file type. Allowed: {ALLOWED_EXTENSIONS}"}), 400
-
-    suffix = "." + file.filename.rsplit(".", 1)[-1].lower()
-    tmp_path = os.path.join(UPLOAD_FOLDER, f"birdid_{uuid.uuid4().hex}{suffix}")
-
+        return jsonify({"error":"No image file"}), 400
+    f = request.files["image"]
+    if not f.filename or not allowed(f.filename):
+        return jsonify({"error":"Invalid file"}), 400
+    suffix = "." + f.filename.rsplit(".",1)[-1].lower()
+    tmp = os.path.join(tempfile.gettempdir(), f"birdid_{uuid.uuid4().hex}{suffix}")
     try:
-        file.save(tmp_path)
-        log.info("Saved upload to %s", tmp_path)
-
-        with Image.open(tmp_path) as img:
+        f.save(tmp)
+        with Image.open(tmp) as img:
             img.verify()
-
         if model is None:
-            return jsonify({"error": "SpeciesNet model not loaded — check server logs"}), 500
-
-        country = request.form.get("country", "").strip().upper()
-        state   = request.form.get("state",   "").strip().upper()
-
-        instance = {"filepath": tmp_path}
-        if country:
-            instance["country"] = country
-        if state:
-            instance["state"] = state
-
-        instances = {"instances": [instance]}
-
-        log.info("Running SpeciesNet on %s", tmp_path)
-        raw = model.predict(instances)
-        log.info("Raw output: %s", raw)
-
-        preds_raw = raw.get("predictions", [raw]) if isinstance(raw, dict) else [raw]
-
-        predictions = []
-        for p in preds_raw:
-            if isinstance(p, dict):
-                label = p.get("label") or p.get("classification") or ""
-                entry = {
-                    "label":             label,
-                    "scientific_name":   p.get("scientific_name") or _extract_sci(label),
-                    "common_name":       p.get("common_name") or label,
-                    "score":             float(p.get("score") or p.get("confidence") or p.get("probability") or 0),
-                    "prediction_source": p.get("prediction_source") or "",
-                }
-                predictions.append(entry)
-
-        predictions.sort(key=lambda x: x["score"], reverse=True)
-
-        return jsonify({
-            "predictions":       predictions,
-            "prediction_source": predictions[0].get("prediction_source", "") if predictions else "",
-            "filepath":          file.filename,
-        })
-
-    except Exception as exc:
-        log.exception("Prediction failed")
-        return jsonify({"error": str(exc)}), 500
-
+            return jsonify({"error":"Model not loaded"}), 500
+        country = request.form.get("country","").strip().upper() or None
+        region = request.form.get("state","").strip().upper() or None
+        log.info("Predicting %s country=%s region=%s", tmp, country, region)
+        raw = model.predict(
+            filepaths=[tmp],
+            country=country,
+            admin1_region=region,
+            run_mode="single_thread",
+            progress_bars=False,
+        )
+        log.info("Result: %s", raw)
+        preds = []
+        for p in (raw.get("predictions",[]) if isinstance(raw,dict) else []):
+            if isinstance(p,dict):
+                label = p.get("label","")
+                preds.append({
+                    "label": label,
+                    "common_name": p.get("common_name") or label,
+                    "scientific_name": p.get("scientific_name",""),
+                    "score": float(p.get("score") or p.get("confidence") or 0),
+                    "prediction_source": p.get("prediction_source",""),
+                })
+        preds.sort(key=lambda x: x["score"], reverse=True)
+        return jsonify({"predictions":preds,"raw":raw})
+    except Exception as e:
+        log.exception("Failed")
+        return jsonify({"error":str(e)}), 500
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
-def _extract_sci(label):
-    if not label:
-        return ""
-    parts = label.split(";")
-    for part in reversed(parts):
-        words = part.strip().split()
-        if len(words) >= 2 and words[0][0].isupper() and words[1][0].islower():
-            return " ".join(words[:2])
-    return label.strip()
-
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host",  default="0.0.0.0")
-    parser.add_argument("--port",  type=int, default=5000)
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args()
-    log.info("Starting BirdID server on %s:%d", args.host, args.port)
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    p = argparse.ArgumentParser()
+    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--port", type=int, default=5000)
+    a = p.parse_args()
+    app.run(host=a.host, port=a.port)
