@@ -27,7 +27,7 @@ sudo journalctl -u birdid -n 10 --no-pager
 ### Push to GitHub from VM
 ```bash
 cd ~/BirdID
-git remote set-url origin https://f75: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@github.com/f75/BirdID.git
+git remote set-url origin https://f75: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@github.com/f75/BirdID.git
 git add .
 git commit -m "your message here"
 git push origin main
@@ -73,7 +73,7 @@ print('SpeciesNet OK')
 # → GCP Console → VPC Network → Firewall → Create Rule → TCP 5000
 
 # Git push asking for credentials?
-git remote set-url origin https://f75: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@github.com/f75/BirdID.git
+git remote set-url origin https://f75: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@github.com/f75/BirdID.git
 
 # Out of sync with GitHub?
 git fetch origin
@@ -108,7 +108,7 @@ curl -X POST http://34.173.73.193:5000/predict -F "image=@C:\temp\DSCN2855.jpg" 
 ```bash
 # On VM — push to GitHub:
 cd ~/BirdID
-git remote set-url origin https://f75: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@github.com/f75/BirdID.git
+git remote set-url origin https://f75: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@github.com/f75/BirdID.git
 git add . && git commit -m "change" && git push origin main
 git remote set-url origin https://github.com/f75/BirdID.git
 
