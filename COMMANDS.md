@@ -5,7 +5,7 @@ Store your token securely (password manager). Never commit it to git.
 Use it only in the terminal like this:
 ```bash
 cd ~/BirdID
-git remote set-url origin https://f75:YOUR_GITHUB_TOKEN@github.com/f75/BirdID.git
+git remote set-url origin https://f75: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@github.com/f75/BirdID.git
 git add .
 git commit -m "your message"
 git push origin main
